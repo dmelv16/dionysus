@@ -1,15 +1,15 @@
 from pathlib import Path
 from typing import Optional, Dict
-import sys
 
 
 class PathConfiguration:
     """
     Discovers and configures project paths dynamically.
-    Can be used standalone or integrated into existing classes.
+    Lookup CSVs are expected in the script directory (GitHub repo).
+    All other folders are discovered recursively in the user-provided project directory.
     """
     
-    # Default folder names to search for
+    # Folder names to search for in project directory
     DEFAULT_FOLDER_NAMES = {
         'csv_data': ['csv_data', 'csv', 'data'],
         'requirements': ['requirements', 'reqs'],
@@ -18,72 +18,106 @@ class PathConfiguration:
         'output': ['bus_monitor_output', 'output', 'results']
     }
     
-    # Lookup CSV can be in root or a specific location
+    # Lookup CSVs in GitHub repo (script directory)
     LOOKUP_CSV_NAMES = ['message_lookup.csv', 'lookup.csv']
     REQUIREMENT_TESTCASE_LOOKUP_NAMES = ['requirement_testcase_lookup.csv', 'req_tc_lookup.csv']
     
-    def __init__(self, root_directory: Optional[Path] = None):
+    def __init__(self, project_directory: Path):
         """
         Initialize path configuration.
         
         Args:
-            root_directory: Root directory to search in. If None, uses current directory.
+            project_directory: User's project directory containing data folders
         """
-        self.root_directory = Path(root_directory) if root_directory else Path.cwd()
+        self.project_directory = Path(project_directory)
+        self.script_directory = Path(__file__).parent  # GitHub repo location
         
-        if not self.root_directory.exists():
-            raise ValueError(f"Root directory does not exist: {self.root_directory}")
+        if not self.project_directory.exists():
+            raise ValueError(f"Project directory does not exist: {self.project_directory}")
         
         self.paths: Dict[str, Path] = {}
         self._discover_paths()
     
     def _discover_paths(self):
-        """Discover all required paths in the root directory."""
-        print(f"\n📁 Root: {self.root_directory}\n")
+        """Discover all required paths."""
+        print(f"\n📁 Project Directory: {self.project_directory}")
+        print(f"📁 Script Directory: {self.script_directory}\n")
         
-        # Find regular folders
+        # Find folders in project directory (searches recursively)
         for key, possible_names in self.DEFAULT_FOLDER_NAMES.items():
-            found_path = self._find_folder(possible_names)
+            found_path = self._find_folder_recursive(possible_names, self.project_directory)
             
             if key == 'output':
                 if found_path is None:
-                    found_path = self.root_directory / possible_names[0]
+                    found_path = self.project_directory / possible_names[0]
                 found_path.mkdir(parents=True, exist_ok=True)
                 print(f"📤 Output: {found_path}")
             elif found_path:
-                print(f"✓ {key}: {found_path.name}")
+                # Show relative path from project root
+                try:
+                    rel_path = found_path.relative_to(self.project_directory)
+                    print(f"✓ {key}: {rel_path}")
+                except ValueError:
+                    print(f"✓ {key}: {found_path}")
             else:
                 print(f"✗ {key}: NOT FOUND")
             
             self.paths[key] = found_path
         
-        # Find lookup CSV files
-        self.paths['lookup_csv'] = self._find_file(self.LOOKUP_CSV_NAMES)
+        # Find lookup CSVs in script directory (GitHub repo)
+        self.paths['lookup_csv'] = self._find_file(self.LOOKUP_CSV_NAMES, self.script_directory)
         if self.paths['lookup_csv']:
-            print(f"✓ lookup_csv: {self.paths['lookup_csv'].name}")
+            print(f"✓ lookup_csv: {self.paths['lookup_csv'].name} (from repo)")
         else:
-            print(f"✗ lookup_csv: NOT FOUND")
+            print(f"✗ lookup_csv: NOT FOUND in {self.script_directory}")
         
-        self.paths['requirement_testcase_lookup'] = self._find_file(self.REQUIREMENT_TESTCASE_LOOKUP_NAMES)
+        self.paths['requirement_testcase_lookup'] = self._find_file(
+            self.REQUIREMENT_TESTCASE_LOOKUP_NAMES, self.script_directory
+        )
         if self.paths['requirement_testcase_lookup']:
-            print(f"✓ req_tc_lookup: {self.paths['requirement_testcase_lookup'].name}")
+            print(f"✓ req_tc_lookup: {self.paths['requirement_testcase_lookup'].name} (from repo)")
         else:
-            print(f"✗ req_tc_lookup: NOT FOUND")
+            print(f"✗ req_tc_lookup: NOT FOUND in {self.script_directory}")
         
         print()
     
-    def _find_folder(self, possible_names: list) -> Optional[Path]:
-        """Find a folder with any of the possible names."""
-        for name in possible_names:
-            path = self.root_directory / name
-            if path.exists() and path.is_dir():
-                return path
-        return None
+    def _find_folder_recursive(self, possible_names: list, search_dir: Path, max_depth: int = 3) -> Optional[Path]:
+        """
+        Recursively find a folder with any of the possible names.
+        
+        Args:
+            possible_names: List of possible folder names
+            search_dir: Directory to search in
+            max_depth: Maximum depth to search (default 3 levels deep)
+        """
+        def search(current_dir: Path, depth: int) -> Optional[Path]:
+            if depth > max_depth:
+                return None
+            
+            # Check current directory
+            for name in possible_names:
+                path = current_dir / name
+                if path.exists() and path.is_dir():
+                    return path
+            
+            # Search subdirectories
+            try:
+                for item in current_dir.iterdir():
+                    if item.is_dir() and not item.name.startswith('.'):
+                        result = search(item, depth + 1)
+                        if result:
+                            return result
+            except PermissionError:
+                pass
+            
+            return None
+        
+        return search(search_dir, 0)
     
-    def _find_file(self, possible_names: list) -> Optional[Path]:
-        """Find a file with any of the possible names in root directory."""
+    def _find_file(self, possible_names: list, search_dir: Path) -> Optional[Path]:
+        """Find a file with any of the possible names in specified directory."""
         for name in possible_names:
-            path = self.root_directory / name
+            path = search_dir / name
             if path.exists() and path.is_file():
                 return path
         return None
@@ -116,29 +150,23 @@ class PathConfiguration:
 class YourExistingClass:
     """Example of how to integrate PathConfiguration into your existing class."""
     
-    def __init__(self, root_directory: Optional[Path] = None):
-        # Discover paths
-        self.path_config = PathConfiguration(root_directory)
-        
-        # Validate required paths
-        required_paths = ['csv_data', 'requirements', 'tca', 'test_cases', 'lookup_csv']
-        if not self.path_config.validate_required_paths(required_paths):
-            raise ValueError("Missing required project folders")
-        
-        # Set instance variables
-        self.csv_folder = self.path_config.get_path('csv_data')
-        self.lookup_csv_path = self.path_config.get_path('lookup_csv')
-        self.requirements_folder = self.path_config.get_path('requirements')
-        self.output_folder = self.path_config.get_path('output')
-        self.tca_folder = self.path_config.get_path('tca')
-        self.test_cases_folder = self.path_config.get_path('test_cases')
-        self.requirement_testcase_lookup_path = self.path_config.get_path('requirement_testcase_lookup')
+    def __init__(self, path_config: PathConfiguration):
+        # Set instance variables from discovered paths
+        self.csv_folder = path_config.get_path('csv_data')
+        self.lookup_csv_path = path_config.get_path('lookup_csv')
+        self.requirements_folder = path_config.get_path('requirements')
+        self.output_folder = path_config.get_path('output')
+        self.tca_folder = path_config.get_path('tca')
+        self.test_cases_folder = path_config.get_path('test_cases')
+        self.requirement_testcase_lookup_path = path_config.get_path('requirement_testcase_lookup')
 
 
 # Example usage
 if __name__ == "__main__":
-    # Simple usage - just run it!
-    config = PathConfiguration()  # Uses current directory
+    # User provides their project directory path
+    project_path = input("Enter project directory path: ").strip()
+    
+    config = PathConfiguration(project_path)
     
     # Validate required paths exist
     required = ['csv_data', 'requirements', 'tca', 'test_cases', 'lookup_csv']
