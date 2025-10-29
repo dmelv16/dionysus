@@ -27,17 +27,17 @@ def check_threshold(
         >>> analyzer = SimplifiedVoltageAnalyzer()
         >>> failed, reason = analyzer.check_threshold(1.5, 0.0, 1.0, "Variance")
         >>> print(failed, reason)
-        True, "Variance 1.500 > 1.000 (dynamic)"
+        True, "Variance 1.5000 > 1.0000 (dynamic)"
         """
         value_rounded = round(value, round_digits)
         min_rounded = round(min_threshold, round_digits)
         max_rounded = round(max_threshold, round_digits)
         
         if value_rounded < min_rounded:
-            reason = f"{metric_name} {value:.3f} < {min_threshold:.3f} (dynamic)"
+            reason = f"{metric_name} {value:.4f} < {min_threshold:.4f} (dynamic)"
             return True, reason
         elif value_rounded > max_rounded:
-            reason = f"{metric_name} {value:.3f} > {max_threshold:.3f} (dynamic)"
+            reason = f"{metric_name} {value:.4f} > {max_threshold:.4f} (dynamic)"
             return True, reason
         
         return False, None
@@ -83,33 +83,22 @@ def check_threshold(
             max_key = f'max_{metric_key}'
             
             if min_key in thresholds and max_key in thresholds:
-                # Special handling for slope to maintain original .4f formatting
-                if metric_key == 'slope':
-                    value_rounded = round(metrics[metric_key], round_digits)
-                    min_rounded = round(thresholds[min_key], round_digits)
-                    max_rounded = round(thresholds[max_key], round_digits)
-                    
-                    if value_rounded < min_rounded or value_rounded > max_rounded:
-                        failed_checks += 1
-                        if value_rounded < min_rounded:
-                            reasons.append(f"{metric_label} {metrics[metric_key]:.4f} < {thresholds[min_key]:.4f} (dynamic)")
-                        else:
-                            reasons.append(f"{metric_label} {metrics[metric_key]:.4f} > {thresholds[max_key]:.4f} (dynamic)")
-                else:
-                    # Use check_threshold for other metrics
-                    failed, reason = self.check_threshold(
-                        metrics[metric_key], 
-                        thresholds[min_key], 
-                        thresholds[max_key],
-                        metric_label,
-                        round_digits
-                    )
-                    if failed:
-                        failed_checks += 1
-                        reasons.append(reason)
+                failed, reason = self.check_threshold(
+                    metrics[metric_key], 
+                    thresholds[min_key], 
+                    thresholds[max_key],
+                    metric_label,
+                    round_digits
+                )
+                if failed:
+                    failed_checks += 1
+                    reasons.append(reason)
         
         # Only return reasons if ALL 4 thresholds failed
-        return reasons if failed_checks == 4 else []
+        if failed_checks < 4:
+            reasons = []
+        
+        return reasons
     
     def check_fixed_thresholds(self, metrics: Dict[str, float]) -> List[str]:
         """
@@ -131,24 +120,27 @@ def check_threshold(
         
         if metrics['variance'] > self.steady_state_thresholds['max_variance']:
             failed_checks += 1
-            reasons.append(f"Variance {metrics['variance']:.3f} > {self.steady_state_thresholds['max_variance']}")
+            reasons.append(f"Variance {metrics['variance']:.4f} > {self.steady_state_thresholds['max_variance']:.4f}")
         
         if metrics['std'] > self.steady_state_thresholds['max_std']:
             failed_checks += 1
-            reasons.append(f"Std {metrics['std']:.3f} > {self.steady_state_thresholds['max_std']}")
+            reasons.append(f"Std {metrics['std']:.4f} > {self.steady_state_thresholds['max_std']:.4f}")
         
         if metrics['abs_slope'] > self.steady_state_thresholds['max_slope']:
             failed_checks += 1
-            reasons.append(f"Slope {metrics['abs_slope']:.4f} > {self.steady_state_thresholds['max_slope']}")
+            reasons.append(f"Slope {metrics['abs_slope']:.4f} > {self.steady_state_thresholds['max_slope']:.4f}")
         
         # Check IQR threshold (adding this as 4th check)
         max_iqr = self.steady_state_thresholds.get('max_iqr', 1.0)  # Default to 1.0 if not set
         if metrics.get('iqr', 0) > max_iqr:
             failed_checks += 1
-            reasons.append(f"IQR {metrics['iqr']:.3f} > {max_iqr}")
+            reasons.append(f"IQR {metrics['iqr']:.4f} > {max_iqr:.4f}")
         
         # Return reasons only if ALL 4 checks failed
-        return reasons if failed_checks == 4 else []
+        if failed_checks < 4:
+            reasons = []
+        
+        return reasons
     
     def process_label_metrics(
         self, 
