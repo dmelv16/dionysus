@@ -19,13 +19,14 @@ def parse_27t_message(message: str) -> Dict:
     if pd.isna(message) or not message:
         return result
     
-    # Extract faulty/total counts (e.g., "115/375 INSTANCES OF ZERO 27T MESSAGES")
-    fault_pattern = r'(\d+)/\d+\s+INSTANCES.*?OUT OF\s+(\d+)\s+TOTAL'
+    # Extract faulty/total counts from the fraction (e.g., "115/375 INSTANCES")
+    # This captures the 115/375 part, where 375 is the total, not the later "432 TOTAL 27T MESSAGES"
+    fault_pattern = r'(\d+)/(\d+)\s+INSTANCES'
     fault_match = re.search(fault_pattern, message, re.IGNORECASE)
     
     if fault_match:
         result['faulty_count'] = int(fault_match.group(1))
-        result['total_count'] = int(fault_match.group(2))
+        result['total_count'] = int(fault_match.group(2))  # This is now 375, not 432
         if result['total_count'] > 0:
             result['fault_rate'] = result['faulty_count'] / result['total_count']
         result['has_data'] = True
