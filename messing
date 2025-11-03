@@ -1,0 +1,242 @@
+You are absolutely right. My last fix over-combined the data. The charts should *only* show flips with data changes, and the header should count the two types separately.
+
+This requires fixing the data pipeline at the source. Here are the edits to make that happen.
+
+-----
+
+### 1\. Python Fix (in `create_interactive_dashboard`)
+
+We need to stop combining the flips in Python and instead send two separate lists to the dashboard.
+
+**A. Update the "Prepare data for JavaScript" section:**
+
+Find this code block:
+
+```python
+        # Prepare data for JavaScript
+        flips_data = []
+        # -----------------------------------------------------------------
+        # FIX: Combine both flips with changes and flips with no changes
+        # -----------------------------------------------------------------
+        if self.df_flips is not None or self.df_flips_no_changes is not None:
+            df_all_flips = pd.concat([
+                self.df_flips if self.df_flips is not None else pd.DataFrame(),
+                self.df_flips_no_changes if self.df_flips_no_changes is not None else pd.DataFrame()
+            ], ignore_index=True)
+            # ... (rest of the block) ...
+```
+
+**Replace it with this new version** that creates two separate data variables:
+
+```python
+        # Prepare data for JavaScript
+        flips_data = []
+        if self.df_flips is not None and not self.df_flips.empty:
+            df_temp = self.df_flips.copy()
+            for col in ['timestamp_busA', 'timestamp_busB']:
+                if col in df_temp.columns:
+                    df_temp[col] = df_temp[col].astype(str)
+            flips_data = df_temp.to_dict('records')
+
+        # -----------------------------------------------------------------
+        # FIX: Add a new variable for flips with NO changes
+        # -----------------------------------------------------------------
+        flips_no_changes_data = []
+        if self.df_flips_no_changes is not None and not self.df_flips_no_changes.empty:
+            df_temp_no_changes = self.df_flips_no_changes.copy()
+            for col in ['timestamp_busA', 'timestamp_busB']:
+                if col in df_temp_no_changes.columns:
+                    df_temp_no_changes[col] = df_temp_no_changes[col].astype(str)
+            flips_no_changes_data = df_temp_no_changes.to_dict('records')
+```
+
+**B. Update the "Convert to JSON" section:**
+
+Find this line:
+
+```python
+        # Convert to JSON
+        flips_data_json = json.dumps(flips_data)
+        test_case_data_json = json.dumps(test_case_data)
+```
+
+**Add the new variable** to be converted:
+
+```python
+        # Convert to JSON
+        flips_data_json = json.dumps(flips_data)
+        # -----------------------------------------------------------------
+        # FIX: Add the new JSON string
+        # -----------------------------------------------------------------
+        flips_no_changes_data_json = json.dumps(flips_no_changes_data)
+        test_case_data_json = json.dumps(test_case_data)
+```
+
+**C. Pass the new JSON to the HTML:**
+
+Find this block near the top of the `html_content` string:
+
+```python
+        <script>
+            // Data from Python
+            const allFlipsData = {flips_data_json};
+            const testCaseData = {test_case_data_json};
+```
+
+**Add the new data variable:**
+
+```python
+        <script>
+            // Data from Python
+            const allFlipsData = {flips_data_json};
+            // -----------------------------------------------------------------
+            // FIX: Add the new data variable
+            // -----------------------------------------------------------------
+            const allFlipsNoChangesData = {flips_no_changes_data_json} || [];
+            const testCaseData = {test_case_data_json};
+```
+
+-----
+
+### 2\. JavaScript Fixes (in `create_interactive_dashboard`)
+
+Now we update the JavaScript to use these two separate data sources.
+
+**A. Add a new global variable:**
+
+At the top of the `<script>` tag, right after the other filtered data variables, **add this line:**
+
+```javascript
+            let filteredTestCaseRequirements = [...testCaseRequirementsData];
+            let filteredRiskData = [...testCaseRiskData];
+            // -----------------------------------------------------------------
+            // FIX: Add a new global variable for the no-change flips
+            // -----------------------------------------------------------------
+            let filteredFlipsNoChangesData = [...allFlipsNoChangesData];
+```
+
+**B. Update the `updateAllCharts` function:**
+
+This function needs to filter *both* flip lists.
+
+```javascript
+            function updateAllCharts() {
+                const unitFilter = document.getElementById('globalUnitFilter').value;
+                const stationFilter = document.getElementById('globalStationFilter').value;
+                const saveFilter = document.getElementById('globalSaveFilter').value;
+                const msgTypeFilter = document.getElementById('globalMsgTypeFilter').value;
+                const testCaseFilter = document.getElementById('globalTestCaseFilter').value;
+                
+                // This part is for the charts/tables (flips WITH changes)
+                filteredFlipsData = allFlipsData.filter(row => {
+                    return (!unitFilter || row.unit_id === unitFilter) &&
+                        (!stationFilter || row.station === stationFilter) &&
+                        (!saveFilter || row.save === saveFilter) &&
+                        (!msgTypeFilter || row.msg_type === msgTypeFilter);
+                });
+                
+                // -----------------------------------------------------------------
+                // FIX: Add a new filter for the NO-CHANGE flips (for the header card)
+                // -----------------------------------------------------------------
+                filteredFlipsNoChangesData = allFlipsNoChangesData.filter(row => {
+                    return (!unitFilter || row.unit_id === unitFilter) &&
+                        (!stationFilter || row.station === stationFilter) &&
+                        (!saveFilter || row.save === saveFilter) &&
+                        (!msgTypeFilter || row.msg_type === msgTypeFilter);
+                });
+
+                // ... (the rest of the function, including the filters for
+                // filteredFlipsData by testCaseFilter, filteredRiskData, etc.
+                // remains the same) ...
+                
+                // Update stats and charts
+                updateStats();
+                updateFilteredCount();
+                drawAllCharts();
+            }
+```
+
+**C. Update the `updateFilteredCount` function:**
+
+This text needs to be accurate.
+
+```javascript
+            function updateFilteredCount() {
+                // ... (code to get filterStatus) ...
+                
+                // -----------------------------------------------------------------
+                // FIX: Update the text to reflect the new data separation
+                // -----------------------------------------------------------------
+                const filterText = filterStatus.length > 0 
+                    ? `Filtered by: ${filterStatus.join(' | ')} - Showing ${filteredFlipsData.length} flips with data changes`
+                    : `Showing all ${allFlipsData.length} flips with data changes`;
+                
+                document.getElementById('filteredCount').textContent = filterText;
+            }
+```
+
+**D. Replace the `updateStats` function:**
+
+Finally, **replace your entire `updateStats` function** with this new version. It calculates the header cards correctly from their separate data sources.
+
+```javascript
+            function updateStats() {
+                const statsRow = document.getElementById('statsRow');
+                
+                // -----------------------------------------------------------------
+                // FIX: 'filteredFlipsData' now ONLY contains flips WITH changes.
+                // -----------------------------------------------------------------
+                const totalFlipsWithChanges = filteredFlipsData.length;
+                
+                // -----------------------------------------------------------------
+                // FIX: Get the count from the *new* filtered list of no-change flips
+                // -----------------------------------------------------------------
+                const flipsWithNoDataChanges = filteredFlipsNoChangesData.length;
+
+                // -----------------------------------------------------------------
+                // FIX: We need to combine *all* filtered flips to get the
+                // "total affected" counts for units, stations, etc.
+                // -----------------------------------------------------------------
+                const allFilteredFlips = [...filteredFlipsData, ...filteredFlipsNoChangesData];
+                
+                const uniqueUnits = [...new Set(allFilteredFlips.map(f => f.unit_id))].length;
+                const uniqueStations = [...new Set(allFilteredFlips.map(f => f.station))].length;
+                const uniqueSaves = [...new Set(allFilteredFlips.map(f => f.save))].length;
+                const uniqueMsgTypes = [...new Set(allFilteredFlips.filter(f => f.msg_type).map(f => f.msg_type))].length;
+                
+                // This logic is still correct
+                const testCasesWithFlips = filteredRiskData.filter(tc => tc.total_bus_flips > 0).length;
+                
+                statsRow.innerHTML = `
+                    <div class="stat-card">
+                        <div class="stat-value">${totalFlipsWithChanges.toLocaleString()}</div>
+                        <div class="stat-label">Flips w/ Data Changes</div>
+                    </div>
+                    
+                    <div class="stat-card warning">
+                        <div class="stat-value">${flipsWithNoDataChanges.toLocaleString()}</div>
+                        <div class="stat-label">Flips w/ No Data Changes</div>
+                    </div>
+                    <div class="stat-card info">
+                        <div class="stat-value">${uniqueUnits}</div>
+                        <div class="stat-label">Units Affected</div>
+                    </div>
+                    <div class.stat-card info">
+                        <div class="stat-value">${uniqueStations}</div>
+                        <div class="stat-label">Stations Affected</div>
+                    </div>
+                    <div class.stat-card success">
+                        <div class="stat-value">${uniqueSaves}</div>
+                        <div class="stat-label">Saves Affected</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${uniqueMsgTypes}</div>
+                        <div class="stat-label">Message Types</div>
+                    </div>
+                    <div class="stat-card warning">
+                        <div class="stat-value">${testCasesWithFlips}</div>
+                        <div class="stat-label">Test Cases w/ Flips</div>
+                    </div>
+                `;
+            }
+```
